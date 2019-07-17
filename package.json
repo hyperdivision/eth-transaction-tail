@@ -1,0 +1,26 @@
+{
+  "name": "@hyperdivision/eth-transaction-tail",
+  "version": "0.0.0",
+  "description": "Tails transactions on the Ethereum blockchain",
+  "main": "index.js",
+  "dependencies": {
+    "ethereum-input-data-decoder": "^0.2.0",
+    "web3": "^1.0.0-beta.55"
+  },
+  "devDependencies": {
+    "standard": "^13.0.2"
+  },
+  "scripts": {
+    "test": "standard"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hyperdivision/eth-transaction-tail.git"
+  },
+  "author": "Mathias Buus (@mafintosh)",
+  "license": "UNLICENSED",
+  "bugs": {
+    "url": "https://github.com/hyperdivision/eth-transaction-tail/issues"
+  },
+  "homepage": "https://github.com/hyperdivision/eth-transaction-tail"
+}
