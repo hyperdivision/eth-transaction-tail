@@ -1,6 +1,6 @@
-# eth-tail
+# eth-transaction-tail
 
-WIP - nothing to see here
+Tails transactions on the Ethereum blockchain
 
 ```
 npm install @hyperdivision/eth-transaction-tail
