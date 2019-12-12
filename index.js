@@ -145,33 +145,3 @@ ETHTail.IN = tailTransactions.IN
 ETHTail.OUT = tailTransactions.OUT
 
 module.exports = ETHTail
-
-const tail = new ETHTail('ws://127.0.0.1:8545', {
-  erc20: [
-    '0x4e2bc1229A77a774C2e56C3dD71E40ACdB499E3f'
-  ],
-  event (e) {
-    console.log(e)
-  },
-  transaction (tx) {
-    console.log(tx)
-  },
-  checkpoint (since) {
-    console.log(since)
-  }
-})
-
-tail.start().then(() => console.log('done')).catch(err => console.error('nej', err))
-
-// const q = new EventTail(tail.web3, {
-//   abi: require('./abi/ERC20.json'),
-//   name: 'Transfer',
-//   // address: '0x4e2bc1229A77a774C2e56C3dD71E40ACdB499E3f',
-//   confirmations: 0,
-//   async event (data, confirmations) {
-//     console.log('-->', data, confirmations)
-//   },
-//   async checkpoint (since) {
-//     console.log('checkpoint', since)
-//   }
-// })
