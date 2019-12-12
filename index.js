@@ -1,4 +1,3 @@
-const tailBlocks = require('./lib/blocks')
 const tailTransactions = require('./lib/transactions')
 const EventTail = require('@hyperdivision/eth-event-tail')
 
@@ -11,7 +10,7 @@ class ETHTail {
     this.web3 = new Web3(new Web3.providers.WebsocketProvider(wsUrl))
     this.events = null
     this.tx = null
-    this.since = opts.since || 0
+    this.since = opts.since || { tx: 0, deposits: 0, erc20: {} }
     this.confirmations = opts.confirmations || 0
     this.filter = opts.filter || (() => true)
     this.transaction = opts.transaction || (() => {})
@@ -29,20 +28,29 @@ class ETHTail {
     this.running.push(new EventTail(this.web3, {
       name: 'DepositForwarded',
       abi: DepositABI,
-      since: this.since,
+      since: this.since.deposits || 0,
       confirmations: this.confirmations,
-      event: onevent
+      event: onevent,
+      checkpoint: oneventcheckpoint
     }))
+
+    this.running.push(tailTransactions(this.web3, this.since.tx || 0, this.confirmations, this.filter, ontx, oncheckpoint))
 
     const erc20 = this.erc20.map(addr => {
       return new EventTail(this.web3, {
         name: 'Transfer',
         abi: ERC20ABI,
         address: addr,
-        since: this.since,
+        since: this.since.erc20[addr] || 0,
         confirmations: this.confirmations,
-        event: onevent
+        event: onevent,
+        checkpoint
       })
+
+      async function checkpoint (since) {
+        self.since.erc20[addr] = since
+        await self.checkpoint(self.since)
+      }
 
       async function onevent (data, confirmations) {
         if (!(await self.filter(data.returnValues.to, tailTransactions.OUT))) return
@@ -63,18 +71,25 @@ class ETHTail {
       }
     })
 
-    this.running.push(tailTransactions(this.web3, this.since, this.confirmations, this.filter, ontx, oncheckpoint))
+    this.running.push(...erc20)
 
     try {
       await Promise.all(this.running.map(e => e.promise))
     } catch (err) {
-      for (const e of this.running) e.stop()
-      throw err
+      for (const e of this.running) {
+        e.stop()
+      }
+      await Promise.allSettled(this.running.map(e => e.promise))
     }
 
     async function oncheckpoint (block) {
-      const since = block.blockNumber + 1
-      await self.checkpoint(since)
+      self.since.tx = block.number + 1
+      await self.checkpoint(self.since)
+    }
+
+    async function oneventcheckpoint (since) {
+      self.since.deposits = since
+      await self.checkpoint(self.since)
     }
 
     async function onevent (data, n) {
@@ -140,10 +155,13 @@ const tail = new ETHTail('ws://127.0.0.1:8545', {
   },
   transaction (tx) {
     console.log(tx)
+  },
+  checkpoint (since) {
+    console.log(since)
   }
 })
 
-tail.start(0).then(() => console.log('done')).catch(err => console.error('nej', err))
+tail.start().then(() => console.log('done')).catch(err => console.error('nej', err))
 
 // const q = new EventTail(tail.web3, {
 //   abi: require('./abi/ERC20.json'),

@@ -12,7 +12,6 @@ npm install @hyperdivision/eth-transaction-tail
 const Tail = require('eth-transaction-tail')
 
 const tail = new Tail(rpcUrl, {
-  since: 424244, // tail chain since this seq (inclusive)
   confirmations: 10, // require this many confirmations
   async filter (addr) {
     return isInterestingAddress(addr)
@@ -20,7 +19,10 @@ const tail = new Tail(rpcUrl, {
   async transaction (transaction) {
     console.log('found this transaction', transaction)
   },
-  async checkpoint (since) {
+  async event (event) {
+    console.log('found this deposit or erc20 event')
+  },
+  async checkpoint (sinceMap) {
     // store this since so you can restart from here
   }
 })
