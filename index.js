@@ -7,8 +7,7 @@ const Web3 = require('web3')
 
 class ETHTail {
   constructor (wsUrl, opts = {}) {
-    this.web3 = new Web3(new Web3.providers.WebsocketProvider(wsUrl))
-    this.events = null
+    this.web3 = opts.web3 || new Web3(new Web3.providers.WebsocketProvider(wsUrl))
     this.tx = null
     this.since = opts.since || { tx: 0, deposits: 0, erc20: {} }
     this.confirmations = opts.confirmations || 0
@@ -16,32 +15,53 @@ class ETHTail {
     this.transaction = opts.transaction || (() => {})
     this.event = opts.event || (() => {})
     this.checkpoint = opts.checkpoint || (() => {})
+    this.block = opts.block || (() => {})
     this.erc20 = opts.erc20 || []
     this.running = []
+    this.events = opts.events !== false
+  }
+
+  head (opts = {}) {
+    return new ETHTail(null, {
+      web3: this.web3,
+      confirmations: 0,
+      since: 'latest',
+      filter: this.filter,
+      events: this.events,
+      ...opts
+    })
   }
 
   async start (since) {
     const self = this
 
     if (since !== undefined) this.since = since
+    if (this.since === 'now' || this.since === 'latest') {
+      const n = await this.web3.eth.getBlockNumber()
+      const erc20 = {}
+      for (const addr of this.erc20) erc20[addr] = n
+      this.since = { tx: n, deposits: n, erc20 }
+    }
 
-    this.running.push(new EventTail(this.web3, {
-      name: 'DepositForwarded',
-      abi: DepositABI,
-      since: this.since.deposits || 0,
-      confirmations: this.confirmations,
-      event: onevent,
-      checkpoint: oneventcheckpoint
-    }))
+    if (this.events) {
+      this.running.push(new EventTail(this.web3, {
+        name: 'DepositForwarded',
+        abi: DepositABI,
+        since: this.since.deposits || 0,
+        confirmations: this.confirmations,
+        event: onevent,
+        checkpoint: oneventcheckpoint
+      }))
+    }
 
-    this.running.push(tailTransactions(this.web3, this.since.tx || 0, this.confirmations, this.filter, ontx, oncheckpoint))
+    this.running.push(tailTransactions(this.web3, this.since.tx || 0, this.confirmations, this.filter, this.block.bind(this), ontx, oncheckpoint))
 
     const erc20 = this.erc20.map(addr => {
       return new EventTail(this.web3, {
         name: 'Transfer',
         abi: ERC20ABI,
         address: addr,
-        since: this.since.erc20[addr] || 0,
+        since: (this.since.erc20 && this.since.erc20[addr]) || 0,
         confirmations: this.confirmations,
         event: onevent,
         checkpoint
@@ -53,7 +73,7 @@ class ETHTail {
       }
 
       async function onevent (data, confirmations) {
-        if (!(await self.filter(data.returnValues.to, tailTransactions.OUT))) return
+        if (!(await self.filter(data.returnValues.to, tailTransactions.OUT, 'ERC20'))) return
 
         const normalised = {
           type: 'event',
@@ -71,7 +91,9 @@ class ETHTail {
       }
     })
 
-    this.running.push(...erc20)
+    if (erc20.length) {
+      this.running.push(...erc20)
+    }
 
     try {
       await Promise.all(this.running.map(e => e.promise))
@@ -80,6 +102,7 @@ class ETHTail {
         e.stop()
       }
       await Promise.allSettled(this.running.map(e => e.promise))
+      throw err
     }
 
     async function oncheckpoint (block) {
@@ -93,7 +116,7 @@ class ETHTail {
     }
 
     async function onevent (data, n) {
-      if (!(await self.filter(data.returnValues.from, tailTransactions.OUT))) return
+      if (!(await self.filter(data.returnValues.from, tailTransactions.OUT, 'DepositForwarded'))) return
 
       const normalised = {
         type: 'event',
@@ -111,11 +134,7 @@ class ETHTail {
     }
 
     async function ontx (data) {
-      if (!data.tx.to) return
-
-      if (await self.web3.eth.getCode(data.tx.to, data.tx.blockNumber) !== '0x') {
-        return
-      }
+      if (!data.tx.to || data.isContract) return
 
       const normalised = {
         type: 'tx',

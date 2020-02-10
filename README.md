@@ -29,4 +29,12 @@ const tail = new Tail(rpcUrl, {
 
 // tail.index is the current block index
 await tail.start() // start tailing, will throw if an error is hit
+
+const head = tail.head({
+  transaction (transaction) {
+    console.log('transaction with 0 confirms', transaction)
+  }
+})
+
+await head.start()
 ```
