@@ -79,17 +79,18 @@ module.exports = class Tail {
     const blockNumber = blk.number
     const transactionIndex = tx.transactionIndex
     const logIndex = log.logIndex
+    const transactionHash = tx.hash
 
     if (e.name === 'DEPOSIT_FACTORY_DEPLOYED' && eq(log.address, this.depositFactory)) {
-      return this.ondepositdeployed({ contractAddress: e.contractAddress, blockNumber, transactionIndex, logIndex }, confirmations, tx, blk, log)
+      return this.ondepositdeployed({ contractAddress: e.contractAddress, transactionHash, blockNumber, transactionIndex, logIndex }, confirmations, tx, blk, log)
     }
 
     if (e.name === 'DEPOSIT_FORWARDED') {
-      return this.ondeposit({ from: log.address, to: e.to, amount: e.amount, blockNumber, transactionIndex, logIndex }, confirmations, tx, blk, log)
+      return this.ondeposit({ from: log.address, to: e.to, amount: e.amount, transactionHash, blockNumber, transactionIndex, logIndex }, confirmations, tx, blk, log)
     }
 
     if (e.name === 'ERC20_TRANSFER') {
-      return this.onerc20({ from: e.from, to: e.to, amount: e.amount, token: e.token, blockNumber, transactionIndex, logIndex }, confirmations, tx, blk, log)
+      return this.onerc20({ from: e.from, to: e.to, amount: e.amount, token: log.address, transactionHash, blockNumber, transactionIndex, logIndex }, confirmations, tx, blk, log)
     }
   }
 
@@ -110,7 +111,7 @@ module.exports = class Tail {
 
       while (l < logs.length && logs[l].transactionIndex === i) {
         const log = logs[l++]
-        const e = events.decode(log.topics)
+        const e = events.decode(log)
         if (!e) continue
 
         if (e.name === 'ERC20_TRANSFER') {
