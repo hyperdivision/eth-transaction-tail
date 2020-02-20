@@ -7,6 +7,7 @@ const FROM = Symbol('from address')
 
 module.exports = class Tail {
   constructor (wsUrl, opts = {}) {
+    this.erc20 = opts.erc20 !== false
     this.depositFactory = opts.depositFactory
     this.web3 = opts.web3 || new Web3(new Web3.providers.WebsocketProvider(wsUrl))
     this.confirmations = 0
@@ -19,6 +20,7 @@ module.exports = class Tail {
     this.since = opts.since || 0
     this.stopped = false
     this.running = null
+    this.topics = [events.DEPOSIT_FACTORY_DEPLOYED.id, events.DEPOSIT_FORWARDED.id].concat(this.erc20 ? events.ERC20_TRANSFER.id : [])
 
     if (opts.isDepositDeployed) this.isDepositDeployed = opts.isDepositDeployed
   }
@@ -95,7 +97,7 @@ module.exports = class Tail {
     const logs = (await this.web3.eth.getPastLogs({
       fromBlock: blk.number,
       toBlock: blk.number,
-      topics: [events.IDS]
+      topics: [this.topics]
     })).sort(sortLogs)
 
     if (this.stopped) return
