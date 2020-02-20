@@ -1,174 +1,154 @@
-const tailTransactions = require('./lib/transactions')
-const EventTail = require('@hyperdivision/eth-event-tail')
-
-const DepositABI = require('./abi/Deposit.json')
-const ERC20ABI = require('./abi/erc20.json')
+const tailBlocks = require('./lib/blocks')
 const Web3 = require('web3')
+const events = require('./lib/events')
 
-class ETHTail {
+const TO = Symbol('to address')
+const FROM = Symbol('from address')
+
+module.exports = class Tail {
   constructor (wsUrl, opts = {}) {
+    this.depositFactory = opts.depositFactory
     this.web3 = opts.web3 || new Web3(new Web3.providers.WebsocketProvider(wsUrl))
-    this.tx = null
-    this.since = opts.since || { tx: 0, deposits: 0, erc20: {} }
-    this.confirmations = opts.confirmations || 0
+    this.confirmations = 0
     this.filter = opts.filter || (() => true)
-    this.transaction = opts.transaction || (() => {})
-    this.event = opts.event || (() => {})
-    this.checkpoint = opts.checkpoint || (() => {})
-    this.block = opts.block || (() => {})
-    this.erc20 = opts.erc20 || []
-    this.running = []
-    this.events = opts.events !== false
+    this.ondepositdeployed = opts.depositDeployed || (() => {})
+    this.ondeposit = opts.deposit || (() => {})
+    this.ontransaction = opts.transaction || (() => {})
+    this.oncheckpoint = opts.checkpoint || (() => {})
+    this.onerc20 = opts.erc20 || (() => {})
+    this.since = opts.since || 0
+    this.stopped = false
+    this.running = null
+
+    if (opts.isDepositDeployed) this.isDepositDeployed = opts.isDepositDeployed
   }
 
-  head (opts = {}) {
-    return new ETHTail(null, {
+  static TO = TO
+  static FROM = FROM
+
+  async start (since = this.since) {
+    if (this.running) throw new Error('Already started')
+
+    if (since === 'now' || since === 'latest') {
+      since = this.since = await this.web3.eth.getBlockNumber()
+    }
+
+    const status = tailBlocks(this.web3, since, this.confirmations, this.onblock.bind(this))
+    const cleanup = () => { this.running = null }
+    this.stopped = false
+    this.running = status
+    status.promise.then(cleanup).catch(cleanup)
+    await status.promise
+  }
+
+  stop () {
+    if (!this.running) return
+    this.stopped = true
+    return this.running.promise
+  }
+
+  head (opts) {
+    return new Tail(null, {
       web3: this.web3,
       confirmations: 0,
-      since: 'latest',
+      since: 'now',
+      depositFactory: this.depositFactory,
       filter: this.filter,
-      events: this.events,
       ...opts
     })
   }
 
-  async start (since) {
-    const self = this
-
-    if (since !== undefined) this.since = since
-    if (this.since === 'now' || this.since === 'latest') {
-      const n = await this.web3.eth.getBlockNumber()
-      const erc20 = {}
-      for (const addr of this.erc20) erc20[addr] = n
-      this.since = { tx: n, deposits: n, erc20 }
-    }
-
-    if (this.events) {
-      this.running.push(new EventTail(this.web3, {
-        name: 'DepositForwarded',
-        abi: DepositABI,
-        since: this.since.deposits || 0,
-        confirmations: this.confirmations,
-        event: onevent,
-        checkpoint: oneventcheckpoint
-      }))
-    }
-
-    this.running.push(tailTransactions(this.web3, this.since.tx || 0, this.confirmations, this.filter, this.block.bind(this), ontx, oncheckpoint))
-
-    const erc20 = this.erc20.map(addr => {
-      return new EventTail(this.web3, {
-        name: 'Transfer',
-        abi: ERC20ABI,
-        address: addr,
-        since: (this.since.erc20 && this.since.erc20[addr]) || 0,
-        confirmations: this.confirmations,
-        event: onevent,
-        checkpoint
-      })
-
-      async function checkpoint (since) {
-        self.since.erc20[addr] = since
-        await self.checkpoint(self.since)
-      }
-
-      async function onevent (data, confirmations) {
-        if (!(await self.filter(data.returnValues.to, tailTransactions.OUT, 'ERC20'))) {
-          if (!(await self.filter(data.returnValues.from, tailTransactions.IN, 'ERC20'))) return
-        }
-
-        const normalised = {
-          type: 'event',
-          name: 'ERC20Transfer',
-          contract: data.address,
-          blockNumber: data.blockNumber,
-          blockHash: data.blockHash,
-          confirmations,
-          transactionIndex: data.transactionIndex,
-          transactionHash: data.transactionHash,
-          from: data.returnValues.from,
-          to: data.returnValues.to,
-          amount: data.returnValues.value
-        }
-
-        await self.event(normalised)
-      }
+  async isDepositDeployed (addr, blockNumber, txIndex) {
+    const logs = await this.web3.eth.getPastLogs({
+      fromBlock: 0,
+      toBlock: blockNumber,
+      address: this.depositFactory,
+      topics: events.DEPOSIT_FACTORY_DEPLOYED.encode(addr)
     })
 
-    if (erc20.length) {
-      this.running.push(...erc20)
+    for (const log of logs) {
+      if (log.transactionIndex <= txIndex) return true
     }
 
-    try {
-      await Promise.all(this.running.map(e => e.promise))
-    } catch (err) {
-      for (const e of this.running) {
-        e.stop()
-      }
-      await Promise.allSettled(this.running.map(e => e.promise))
-      throw err
+    return false
+  }
+
+  onlog (log, e, tx, blk, confirmations) {
+    const blockNumber = blk.number
+    const transactionIndex = tx.transactionIndex
+    const logIndex = log.logIndex
+
+    if (e.name === 'DEPOSIT_FACTORY_DEPLOYED' && eq(log.address, this.depositFactory)) {
+      return this.ondepositdeployed({ contractAddress: e.contractAddress, blockNumber, transactionIndex, logIndex }, confirmations, tx, blk, log)
     }
 
-    async function oncheckpoint (block) {
-      self.since.tx = block.number + 1
-      await self.checkpoint(self.since)
+    if (e.name === 'DEPOSIT_FORWARDED') {
+      return this.ondeposit({ from: log.address, to: e.to, amount: e.amount, blockNumber, transactionIndex, logIndex }, confirmations, tx, blk, log)
     }
 
-    async function oneventcheckpoint (since) {
-      self.since.deposits = since
-      await self.checkpoint(self.since)
-    }
-
-    async function onevent (data, n) {
-      if (!(await self.filter(data.address, tailTransactions.IN, 'DepositForwarded'))) {
-        if (!(await self.filter(data.returnValues.to, tailTransactions.OUT, 'DepositForwarded'))) return
-      }
-
-      const normalised = {
-        type: 'event',
-        name: 'DepositForwarded',
-        contract: data.address,
-        blockNumber: data.blockNumber,
-        blockHash: data.blockHash,
-        confirmations: n,
-        transactionIndex: data.transactionIndex,
-        transactionHash: data.transactionHash,
-        from: data.address,
-        to: data.returnValues.to,
-        amount: data.returnValues.amount
-      }
-
-      await self.event(normalised)
-    }
-
-    async function ontx (data) {
-      if (!data.tx.to || data.isContract) return
-
-      const normalised = {
-        type: 'tx',
-        succeeded: data.succeeded,
-        blockNumber: data.tx.blockNumber,
-        blockHash: data.tx.blockHash,
-        confirmations: data.confirmations,
-        transactionIndex: data.tx.transactionIndex,
-        transactionHash: data.tx.hash,
-        from: data.tx.from,
-        to: data.tx.to,
-        amount: data.tx.value,
-        gas: data.tx.gas
-      }
-
-      await self.transaction(normalised)
+    if (e.name === 'ERC20_TRANSFER') {
+      return this.onerc20({ from: e.from, to: e.to, amount: e.amount, token: e.token, blockNumber, transactionIndex, logIndex }, confirmations, tx, blk, log)
     }
   }
 
-  async stop () {
-    for (const e of this.running) e.stop()
-    await Promise.allSettled(this.running.map(e => e.promise))
+  async onblock (blk, confirmations) {
+    const logs = (await this.web3.eth.getPastLogs({
+      fromBlock: blk.number,
+      toBlock: blk.number,
+      topics: [events.IDS]
+    })).sort(sortLogs)
+
+    if (this.stopped) return
+
+    let l = 0
+
+    for (let i = 0; i < blk.transactions.length; i++) {
+      const tx = blk.transactions[i]
+      let receipt
+
+      while (l < logs.length && logs[l].transactionIndex === i) {
+        const log = logs[l++]
+        const e = events.decode(log.topics)
+        if (!e) continue
+
+        if (e.name === 'ERC20_TRANSFER') {
+          if (!(await this.filter(e.to, TO, log.address)) && !(await this.filter(e.from, FROM, log.address))) {
+            continue
+          }
+        }
+
+        if (!receipt) receipt = await this.web3.eth.getTransactionReceipt(tx.hash)
+        if (!receipt.status) continue
+
+        await this.onlog(log, e, tx, blk, confirmations)
+        if (this.stopped) return
+      }
+      if (this.stopped) return
+
+      if (!(await this.filter(tx.to, TO, null)) && !(await this.filter(tx.from, FROM, null))) continue
+      if (this.stopped) return
+
+      if (tx.to && await this.isDepositDeployed(tx.to, blk.number, i)) continue
+
+      if (!receipt) receipt = await this.web3.eth.getTransactionReceipt(tx.hash)
+      if (!receipt.status) continue
+
+      await this.ontransaction(tx, confirmations, blk)
+      if (this.stopped) return
+    }
+
+    await this.oncheckpoint(blk.number + 1, confirmations, blk)
+    if (this.stopped) return
   }
 }
 
-ETHTail.IN = tailTransactions.IN
-ETHTail.OUT = tailTransactions.OUT
+function sortLogs (a, b) {
+  if (a.blockNumber !== b.blockNumber) return a.blockNumber - b.blockNumber
+  if (a.transactionIndex !== b.transactionIndex) return a.transactionIndex - b.transactionIndex
+  return a.logIndex - b.logIndex
+}
 
-module.exports = ETHTail
+function eq (a, b) {
+  if (!a || !b) return false
+  return a.toLowerCase() === b.toLowerCase()
+}

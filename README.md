@@ -13,18 +13,31 @@ const Tail = require('eth-transaction-tail')
 
 const tail = new Tail(rpcUrl, {
   confirmations: 10, // require this many confirmations
-  async filter (addr) {
+  depositFactory: '0x...',
+  async isDepositDeployed (addr, blockNumber, txIndex) {
+    // optional! return true if deposit contract is deployed at this addr
+    // if not provided, internally the indexed event is used
+    return true // or false
+  },
+  async depositDeployed (event) {
+    // deposit is deployed
+  },
+  async filter (addr, type, erc20address) {
     return isInterestingAddress(addr)
   },
   async transaction (transaction) {
     console.log('found this transaction', transaction)
   },
-  async event (event) {
-    console.log('found this deposit or erc20 event')
+  async deposit (event) {
+    console.log('found this deposit event')
   },
-  async checkpoint (sinceMap) {
-    // store this since so you can restart from here
+  async erc20 (event) {
+    console.log('found this erc20 transfer event')
   }
+  async checkpoint (since) {
+    // store this since so you can restart from here
+  },
+  since: 'now' // or a seq
 })
 
 // tail.index is the current block index
