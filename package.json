@@ -4,7 +4,7 @@
   "description": "Tails transactions on the Ethereum blockchain",
   "main": "index.js",
   "dependencies": {
-    "@hyperdivision/eth-event-tail": "^1.1.0",
+    "@hyperdivision/eth-event-tail": "^1.1.1",
     "web3": "^1.2.4"
   },
   "devDependencies": {
