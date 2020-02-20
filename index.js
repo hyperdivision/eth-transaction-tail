@@ -73,17 +73,21 @@ class ETHTail {
       }
 
       async function onevent (data, confirmations) {
-        if (!(await self.filter(data.returnValues.to, tailTransactions.OUT, 'ERC20'))) return
+        if (!(await self.filter(data.returnValues.to, tailTransactions.OUT, 'ERC20'))) {
+          if (!(await self.filter(data.returnValues.from, tailTransactions.IN, 'ERC20'))) return
+        }
 
         const normalised = {
           type: 'event',
           name: 'ERC20Transfer',
+          contract: data.address,
           blockNumber: data.blockNumber,
           blockHash: data.blockHash,
           confirmations,
           transactionIndex: data.transactionIndex,
           transactionHash: data.transactionHash,
-          address: data.returnValues.to,
+          from: data.returnValues.from,
+          to: data.returnValues.to,
           amount: data.returnValues.value
         }
 
@@ -116,17 +120,21 @@ class ETHTail {
     }
 
     async function onevent (data, n) {
-      if (!(await self.filter(data.returnValues.from, tailTransactions.OUT, 'DepositForwarded'))) return
+      if (!(await self.filter(data.address, tailTransactions.IN, 'DepositForwarded'))) {
+        if (!(await self.filter(data.returnValues.to, tailTransactions.OUT, 'DepositForwarded'))) return
+      }
 
       const normalised = {
         type: 'event',
         name: 'DepositForwarded',
+        contract: data.address,
         blockNumber: data.blockNumber,
         blockHash: data.blockHash,
         confirmations: n,
         transactionIndex: data.transactionIndex,
         transactionHash: data.transactionHash,
-        address: data.returnValues.from,
+        from: data.address,
+        to: data.returnValues.to,
         amount: data.returnValues.amount
       }
 
