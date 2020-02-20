@@ -17,6 +17,7 @@ module.exports = class Tail {
     this.ontransaction = opts.transaction || (() => {})
     this.oncheckpoint = opts.checkpoint || (() => {})
     this.onerc20 = opts.erc20 || (() => {})
+    this.onblock = opts.block || (() => {})
     this.since = opts.since || 0
     this.stopped = false
     this.running = null
@@ -35,7 +36,7 @@ module.exports = class Tail {
       since = this.since = await this.web3.eth.getBlockNumber()
     }
 
-    const status = tailBlocks(this.web3, since, this.confirmations, this.onblock.bind(this))
+    const status = tailBlocks(this.web3, since, this.confirmations, this._onblock.bind(this))
     const cleanup = () => { this.running = null }
     this.stopped = false
     this.running = status
@@ -94,7 +95,9 @@ module.exports = class Tail {
     }
   }
 
-  async onblock (blk, confirmations) {
+  async _onblock (blk, confirmations) {
+    await this.onblock(blk)
+
     const logs = (await this.web3.eth.getPastLogs({
       fromBlock: blk.number,
       toBlock: blk.number,
