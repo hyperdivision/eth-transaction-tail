@@ -107,10 +107,10 @@ module.exports = class Tail {
     if (this.stopped) return
 
     let l = 0
+    const queue = []
 
     for (let i = 0; i < blk.transactions.length; i++) {
       const tx = blk.transactions[i]
-      let receipt
 
       while (l < logs.length && logs[l].transactionIndex === i) {
         const log = logs[l++]
@@ -122,25 +122,34 @@ module.exports = class Tail {
             continue
           }
         }
+        if (e.name === 'DEPOSIT_FACTORY_DEPLOYED' && !eq(log.address, this.depositFactory)) {
+          continue
+        }
 
-        if (!receipt) receipt = await this.web3.eth.getTransactionReceipt(tx.hash)
-        if (!receipt.status) continue
+        // TODO: shortcircuit the DEPOSIT_FORWARDED event also here for more speed
 
-        await this.onlog(log, e, tx, blk, confirmations)
-        if (this.stopped) return
+        queue.push({
+          skip: false,
+          receipt: this.web3.eth.getTransactionReceipt(tx.hash),
+          op: () => this.onlog(log, e, tx, blk, confirmations)
+        })
       }
-      if (this.stopped) return
 
+      if (this.stopped) return
       if (!(await this.filter(tx.to, TO, null)) && !(await this.filter(tx.from, FROM, null))) continue
       if (this.stopped) return
 
-      if (tx.to && await this.isDepositDeployed(tx.to, blk.number, i)) continue
+      queue.push({
+        skip: tx.to && this.isDepositDeployed(tx.to, blk.number, i),
+        receipt: this.web3.eth.getTransactionReceipt(tx.hash),
+        op: () => this.ontransaction(tx, confirmations, blk)
+      })
+    }
 
-      if (!receipt) receipt = await this.web3.eth.getTransactionReceipt(tx.hash)
-      if (!receipt.status) continue
-
-      await this.ontransaction(tx, confirmations, blk)
-      if (this.stopped) return
+    for (const { skip, receipt, op } of queue) {
+      if (await skip) continue
+      if (!(await receipt).status) continue
+      await op()
     }
 
     await this.oncheckpoint(blk.number + 1, confirmations, blk)
