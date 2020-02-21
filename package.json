@@ -4,6 +4,7 @@
   "description": "Tails transactions on the Ethereum blockchain",
   "main": "index.js",
   "dependencies": {
+    "ethereumjs-abi": "^0.6.8",
     "web3": "^1.2.4"
   },
   "repository": {
