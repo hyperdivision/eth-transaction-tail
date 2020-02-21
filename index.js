@@ -45,7 +45,7 @@ module.exports = class Tail {
   }
 
   stop () {
-    if (!this.running) return
+    if (!this.running) return Promise.resolve()
     this.stopped = true
     return this.running.promise
   }
