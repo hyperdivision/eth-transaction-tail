@@ -72,8 +72,6 @@ module.exports = class Tail {
     const code = await this.web3.eth.getCode(addr, blockNumber - 1)
     if (code === '0x') return false
 
-    if (this.deployCache && this.deployCache.get(addr)) return true
-
     const logs = await this.web3.eth.getPastLogs({
       fromBlock: blockNumber,
       toBlock: blockNumber,
@@ -83,12 +81,11 @@ module.exports = class Tail {
 
     for (const log of logs) {
       if (log.transactionIndex <= txIndex) {
-        if (this.deployCache) this.deployCache.set(addr, true)
         return true
       }
     }
 
-    return false
+    return true
   }
 
   onlog (log, e, tx, blk, confirmations) {
@@ -144,7 +141,8 @@ module.exports = class Tail {
         // TODO: shortcircuit the DEPOSIT_FORWARDED event also here for more speed
 
         queue.push({
-          skip: false,
+          tx,
+          deployed: false,
           receipt: this.web3.eth.getTransactionReceipt(tx.hash),
           op: () => this.onlog(log, e, tx, blk, confirmations)
         })
@@ -154,17 +152,28 @@ module.exports = class Tail {
       if (!(await this.filter(tx.to, TO, null)) && !(await this.filter(tx.from, FROM, null))) continue
       if (this.stopped) return
 
+      const isDeployedCache = (tx.to && this.deployCache && this.deployCache.get(tx.to)) || false
+      if (isDeployedCache) continue
+
       queue.push({
-        skip: tx.to && this.isDepositDeployed(tx.to, blk.number, i),
+        tx,
+        deployed: tx.to && this.isDepositDeployed(tx.to, blk.number, i),
         receipt: this.web3.eth.getTransactionReceipt(tx.hash),
         op: () => this.ontransaction(tx, confirmations, blk)
       })
     }
 
-    for (const { skip, receipt, op } of queue) {
-      if (await skip) continue
+    for (const { deployed, receipt, op } of queue) {
+      if (await deployed) continue
       if (!(await receipt).status) continue
       await op()
+    }
+
+    // update cache
+    if (this.deployCache) {
+      for (const { tx, deployed } of queue) {
+        if (await deployed) this.deployCache.set(tx.to, true)
+      }
     }
 
     await this.oncheckpoint(blk.number + 1, confirmations, blk)
