@@ -61,9 +61,16 @@ module.exports = class Tail {
     })
   }
 
-  async isDepositDeployed (addr, blockNumber, txIndex) {
+  isDepositDeployed (addr, blockNumber, txIndex) {
+    return this.isDepositDeployedFromChain(addr, blockNumber, txIndex)
+  }
+
+  async isDepositDeployedFromChain (addr, blockNumber, txIndex) {
+    const code = await this.web3.eth.getCode(addr, blockNumber - 1)
+    if (code === '0x') return false
+
     const logs = await this.web3.eth.getPastLogs({
-      fromBlock: 0,
+      fromBlock: blockNumber,
       toBlock: blockNumber,
       address: this.depositFactory,
       topics: events.DEPOSIT_FACTORY_DEPLOYED.encode(addr)
