@@ -1,5 +1,6 @@
 const tailBlocks = require('./lib/blocks')
 const Web3 = require('web3')
+const hashlru = require('hashlru')
 const events = require('./lib/events')
 
 const TO = Symbol('to address')
@@ -8,6 +9,7 @@ const FROM = Symbol('from address')
 module.exports = class Tail {
   constructor (wsUrl, opts = {}) {
     this.erc20 = opts.erc20 !== false
+    this.deployCache = opts.deployCache === false ? null : (opts.deployCache || hashlru(512))
     this.depositFactory = opts.depositFactory
     this.web3 = opts.web3 || new Web3(new Web3.providers.WebsocketProvider(wsUrl))
     this.confirmations = 0
@@ -53,6 +55,7 @@ module.exports = class Tail {
   head (opts) {
     return new Tail(null, {
       web3: this.web3,
+      deployCache: false,
       confirmations: 0,
       since: 'now',
       depositFactory: this.depositFactory,
@@ -69,6 +72,8 @@ module.exports = class Tail {
     const code = await this.web3.eth.getCode(addr, blockNumber - 1)
     if (code === '0x') return false
 
+    if (this.deployCache && this.deployCache.get(addr)) return true
+
     const logs = await this.web3.eth.getPastLogs({
       fromBlock: blockNumber,
       toBlock: blockNumber,
@@ -77,7 +82,10 @@ module.exports = class Tail {
     })
 
     for (const log of logs) {
-      if (log.transactionIndex <= txIndex) return true
+      if (log.transactionIndex <= txIndex) {
+        if (this.deployCache) this.deployCache.set(addr, true)
+        return true
+      }
     }
 
     return false
