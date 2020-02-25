@@ -12,7 +12,7 @@ module.exports = class Tail {
     this.deployCache = opts.deployCache === false ? null : (opts.deployCache || hashlru(512))
     this.depositFactory = opts.depositFactory
     this.web3 = opts.web3 || new Web3(new Web3.providers.WebsocketProvider(wsUrl))
-    this.confirmations = 0
+    this.confirmations = typeof opts.confirmations === 'number' ? opts.confirmations : 12
     this.filter = opts.filter || (() => true)
     this.ondepositdeployed = opts.depositDeployed || (() => {})
     this.ondeposit = opts.deposit || (() => {})
