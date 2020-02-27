@@ -37,7 +37,7 @@ module.exports = class Tail {
     if (this.running) throw new Error('Already started')
 
     if (since === 'now' || since === 'latest') {
-      since = this.since = Math.max(this.sinceMin, await this.web3.eth.getBlockNumber())
+      since = this.since = Math.max(this.minSince, await this.web3.eth.getBlockNumber())
     }
 
     const status = tailBlocks(this.web3, since, this.confirmations, this._onblock.bind(this))
