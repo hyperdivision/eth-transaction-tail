@@ -25,7 +25,7 @@ module.exports = class Tail {
     this.stopped = false
     this.running = null
     this.topics = [events.DEPOSIT_FACTORY_DEPLOYED.id, events.DEPOSIT_FORWARDED.id].concat(this.erc20 ? events.ERC20_TRANSFER.id : [])
-    this.limit = 2
+    this.limit = 1
 
     if (opts.isDepositDeployed) this.isDepositDeployed = opts.isDepositDeployed
   }
