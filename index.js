@@ -9,7 +9,7 @@ const FROM = Symbol('from address')
 module.exports = class Tail {
   constructor (wsUrl, opts = {}) {
     this.erc20 = opts.erc20 !== false
-    this.deployCache = opts.deployCache === false ? null : (opts.deployCache || hashlru(512))
+    this.deployCache = makeCache(opts.deployCache)
     this.depositFactory = opts.depositFactory
     this.web3 = opts.web3 || new Web3(new Web3.providers.WebsocketProvider(wsUrl))
     this.confirmations = typeof opts.confirmations === 'number' ? opts.confirmations : 12
@@ -21,9 +21,11 @@ module.exports = class Tail {
     this.onerc20 = opts.erc20 || (() => {})
     this.onblock = opts.block || (() => {})
     this.since = opts.since || 0
+    this.minSince = opts.minSince || 0
     this.stopped = false
     this.running = null
     this.topics = [events.DEPOSIT_FACTORY_DEPLOYED.id, events.DEPOSIT_FORWARDED.id].concat(this.erc20 ? events.ERC20_TRANSFER.id : [])
+    this.limit = 2
 
     if (opts.isDepositDeployed) this.isDepositDeployed = opts.isDepositDeployed
   }
@@ -35,7 +37,7 @@ module.exports = class Tail {
     if (this.running) throw new Error('Already started')
 
     if (since === 'now' || since === 'latest') {
-      since = this.since = await this.web3.eth.getBlockNumber()
+      since = this.since = Math.max(this.sinceMin, await this.web3.eth.getBlockNumber())
     }
 
     const status = tailBlocks(this.web3, since, this.confirmations, this._onblock.bind(this))
@@ -59,10 +61,20 @@ module.exports = class Tail {
       deployCache: false,
       confirmations: 0,
       since: 'now',
+      minSince: typeof this.since === 'number' ? this.since + this.confirmations : 0,
       depositFactory: this.depositFactory,
       filter: this.filter,
       ...opts
     })
+  }
+
+  isDepositDeployedCached (addr, blockNumber, txIndex) {
+    if (this.deployCache) {
+      const deployed = this.deployCache.get(addr.toLowerCase())
+      if (deployed === false) return false
+      if (deployed === true) return true
+    }
+    return this.isDepositDeployed(addr, blockNumber, txIndex)
   }
 
   isDepositDeployed (addr, blockNumber, txIndex) {
@@ -70,32 +82,41 @@ module.exports = class Tail {
   }
 
   async isDepositDeployedFromChain (addr, blockNumber, txIndex) {
-    const code = await this.web3.eth.getCode(addr, blockNumber - 1)
-    if (code === '0x') return false
+    let tries = 10
+    while (true) {
+      try {
+        const code = await this.web3.eth.getCode(addr, blockNumber - 1)
+        if (code === '0x') return false
 
-    const logs = await this.web3.eth.getPastLogs({
-      fromBlock: blockNumber,
-      toBlock: blockNumber,
-      address: this.depositFactory,
-      topics: events.DEPOSIT_FACTORY_DEPLOYED.encode(addr)
-    })
+        const logs = await this.web3.eth.getPastLogs({
+          fromBlock: blockNumber,
+          toBlock: blockNumber,
+          address: this.depositFactory,
+          topics: events.DEPOSIT_FACTORY_DEPLOYED.encode(addr)
+        })
 
-    for (const log of logs) {
-      if (log.transactionIndex <= txIndex) {
+        for (const log of logs) {
+          if (log.transactionIndex <= txIndex) {
+            return true
+          }
+        }
+
         return true
+      } catch (err) {
+        if (--tries > 0) continue
+        throw err
       }
     }
-
-    return true
   }
 
-  onlog (log, e, tx, blk, confirmations) {
+  onlog (log, e, tx, blk, confirmations, deployStatus) {
     const blockNumber = blk.number
     const transactionIndex = tx.transactionIndex
     const logIndex = log.logIndex
     const transactionHash = tx.hash
 
     if (e.name === 'DEPOSIT_FACTORY_DEPLOYED' && eq(log.address, this.depositFactory)) {
+      deployStatus.set(e.contractAddress.toLowerCase(), Promise.resolve(true))
       return this.ondepositdeployed({ contractAddress: e.contractAddress, transactionHash, blockNumber, transactionIndex, logIndex }, confirmations, tx, blk, log)
     }
 
@@ -117,10 +138,13 @@ module.exports = class Tail {
       topics: [this.topics]
     })).sort(sortLogs)
 
-    if (this.stopped) return
+    const queue = []
+    const deployStatus = new Map()
+
+    if (this.stopped) return all()
 
     let l = 0
-    const queue = []
+    let parallel = 0
 
     for (let i = 0; i < blk.transactions.length; i++) {
       const tx = blk.transactions[i]
@@ -141,44 +165,57 @@ module.exports = class Tail {
 
         // TODO: shortcircuit the DEPOSIT_FORWARDED event also here for more speed
 
+        const receipt = this.web3.eth.getTransactionReceipt(tx.hash)
+        if (++parallel > this.limit) await receipt
+
         queue.push({
           tx,
-          deployed: false,
-          receipt: this.web3.eth.getTransactionReceipt(tx.hash),
-          op: () => this.onlog(log, e, tx, blk, confirmations)
+          checkDeployed: false,
+          receipt,
+          op: () => this.onlog(log, e, tx, blk, confirmations, deployStatus)
         })
       }
 
-      if (this.stopped) return
+      if (this.stopped) return all()
       if (!(await this.filter(tx.to, TO, null)) && !(await this.filter(tx.from, FROM, null))) continue
-      if (this.stopped) return
+      if (this.stopped) return all()
 
-      const isDeployedCache = (tx.to && this.deployCache && this.deployCache.get(tx.to)) || false
-      if (isDeployedCache) continue
+      if (tx.to && !deployStatus.has(tx.to.toLowerCase())) {
+        const p = this.isDepositDeployedCached(tx.to, blk.number, i)
+        deployStatus.set(tx.to.toLowerCase(), p)
+        if (++parallel > this.limit) await p
+      }
+
+      const receipt = this.web3.eth.getTransactionReceipt(tx.hash)
+      if (++parallel > this.limit) await receipt
 
       queue.push({
         tx,
-        deployed: tx.to && this.isDepositDeployed(tx.to, blk.number, i),
-        receipt: this.web3.eth.getTransactionReceipt(tx.hash),
+        checkDeployed: !!tx.to,
+        receipt,
         op: () => this.ontransaction(tx, confirmations, blk)
       })
     }
 
-    for (const { deployed, receipt, op } of queue) {
-      if (await deployed) continue
+    for (const { tx, checkDeployed, receipt, op } of queue) {
+      if (checkDeployed && await deployStatus.get(tx.to.toLowerCase())) continue
       if (!(await receipt).status) continue
       await op()
+      if (this.limit < 64) this.limit++
     }
 
-    // update cache
     if (this.deployCache) {
-      for (const { tx, deployed } of queue) {
-        if (await deployed) this.deployCache.set(tx.to, true)
+      for (const [k, v] of deployStatus) {
+        this.deployCache.set(k, await v)
       }
     }
 
     await this.oncheckpoint(blk.number + 1, confirmations, blk)
-    if (this.stopped) return
+
+    async function all () {
+      for (const { receipt } of queue) await receipt
+      for (const v of deployStatus.values()) await v
+    }
   }
 }
 
@@ -191,4 +228,10 @@ function sortLogs (a, b) {
 function eq (a, b) {
   if (!a || !b) return false
   return a.toLowerCase() === b.toLowerCase()
+}
+
+function makeCache (size) {
+  if (size === false || size === 0) return null
+  if (size && typeof size !== 'number') return size
+  return hashlru(typeof size === 'number' ? size : 1024)
 }
