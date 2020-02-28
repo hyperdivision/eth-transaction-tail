@@ -10,7 +10,7 @@ module.exports = class Tail {
   constructor (wsUrl, opts = {}) {
     this.erc20 = opts.erc20 !== false
     this.deployCache = makeCache(opts.deployCache)
-    this.depositFactory = opts.depositFactory
+    this.depositFactory = [].concat(opts.depositFactory || [])
     this.web3 = opts.web3 || new Web3(new Web3.providers.WebsocketProvider(wsUrl))
     this.confirmations = typeof opts.confirmations === 'number' ? opts.confirmations : 12
     this.filter = opts.filter || (() => true)
@@ -100,7 +100,7 @@ module.exports = class Tail {
     const logIndex = log.logIndex
     const transactionHash = tx.hash
 
-    if (e.name === 'DEPOSIT_FACTORY_DEPLOYED' && eq(log.address, this.depositFactory)) {
+    if (e.name === 'DEPOSIT_FACTORY_DEPLOYED' && eqList(log.address, this.depositFactory)) {
       deployStatus.set(e.contractAddress.toLowerCase(), Promise.resolve(true))
       return this.ondepositdeployed({ contractAddress: e.contractAddress, transactionHash, blockNumber, transactionIndex, logIndex }, confirmations, tx, blk, log)
     }
@@ -144,7 +144,7 @@ module.exports = class Tail {
             continue
           }
         }
-        if (e.name === 'DEPOSIT_FACTORY_DEPLOYED' && !eq(log.address, this.depositFactory)) {
+        if (e.name === 'DEPOSIT_FACTORY_DEPLOYED' && !eqList(log.address, this.depositFactory)) {
           continue
         }
 
@@ -208,6 +208,13 @@ function sortLogs (a, b) {
   if (a.blockNumber !== b.blockNumber) return a.blockNumber - b.blockNumber
   if (a.transactionIndex !== b.transactionIndex) return a.transactionIndex - b.transactionIndex
   return a.logIndex - b.logIndex
+}
+
+function eqList (a, list) {
+  for (const addr of list) {
+    if (eq(a, addr)) return true
+  }
+  return false
 }
 
 function eq (a, b) {
