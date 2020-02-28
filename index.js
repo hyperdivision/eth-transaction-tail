@@ -68,13 +68,13 @@ module.exports = class Tail {
     })
   }
 
-  isDepositDeployedCached (addr, blockNumber, txIndex) {
+  isDepositDeployedCached (addr, blockNumber) {
     if (this.deployCache) {
       const deployed = this.deployCache.get(addr.toLowerCase())
       if (deployed === false) return false
       if (deployed === true) return true
     }
-    return this.isDepositDeployed(addr, blockNumber, txIndex)
+    return this.isDepositDeployed(addr, blockNumber)
   }
 
   isDepositDeployed (addr, blockNumber) {
@@ -85,7 +85,7 @@ module.exports = class Tail {
     let tries = 10
     while (true) {
       try {
-        const code = await this.web3.eth.getCode(addr, blockNumber - 1)
+        const code = await this.web3.eth.getCode(addr, blockNumber)
         return code !== '0x'
       } catch (err) {
         if (--tries > 0) continue
@@ -166,7 +166,7 @@ module.exports = class Tail {
       if (this.stopped) return all()
 
       if (tx.to && !deployStatus.has(tx.to.toLowerCase())) {
-        const p = this.isDepositDeployedCached(tx.to, blk.number, i)
+        const p = this.isDepositDeployedCached(tx.to, blk.number - 1)
         deployStatus.set(tx.to.toLowerCase(), p)
         if (++parallel > this.limit) await p
       }
