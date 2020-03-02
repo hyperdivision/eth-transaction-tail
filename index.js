@@ -20,12 +20,13 @@ module.exports = class Tail {
     this.oncheckpoint = opts.checkpoint || (() => {})
     this.onerc20 = opts.erc20 || (() => {})
     this.onblock = opts.block || (() => {})
+    this.onfork = opts.fork || (() => {})
     this.since = opts.since || 0
     this.minSince = opts.minSince || 0
+    this.maxParallel = 1
     this.stopped = false
     this.running = null
     this.topics = [events.DEPOSIT_FACTORY_DEPLOYED.id, events.DEPOSIT_FORWARDED.id].concat(this.erc20 ? events.ERC20_TRANSFER.id : [])
-    this.limit = 1
 
     if (opts.isDepositDeployed) this.isDepositDeployed = opts.isDepositDeployed
   }
@@ -40,7 +41,7 @@ module.exports = class Tail {
       since = this.since = Math.max(this.minSince, await this.web3.eth.getBlockNumber())
     }
 
-    const status = tailBlocks(this.web3, since, this.confirmations, this._onblock.bind(this))
+    const status = tailBlocks(this.web3, since, this.confirmations, this._onblock.bind(this), this.onfork.bind(this))
     const cleanup = () => { this.running = null }
     this.stopped = false
     this.running = status
@@ -82,16 +83,8 @@ module.exports = class Tail {
   }
 
   async isDepositDeployedFromChain (addr, blockNumber) {
-    let tries = 10
-    while (true) {
-      try {
-        const code = await this.web3.eth.getCode(addr, blockNumber)
-        return code !== '0x'
-      } catch (err) {
-        if (--tries > 0) continue
-        throw err
-      }
-    }
+    const code = await this.web3.eth.getCode(addr, blockNumber)
+    return code !== '0x'
   }
 
   onlog (log, e, tx, blk, confirmations, deployStatus) {
@@ -151,7 +144,7 @@ module.exports = class Tail {
         // TODO: shortcircuit the DEPOSIT_FORWARDED event also here for more speed
 
         const receipt = this.web3.eth.getTransactionReceipt(tx.hash)
-        if (++parallel > this.limit) await receipt
+        if (++parallel > this.maxParallel) await receipt
 
         queue.push({
           tx,
@@ -168,11 +161,11 @@ module.exports = class Tail {
       if (tx.to && !deployStatus.has(tx.to.toLowerCase())) {
         const p = this.isDepositDeployedCached(tx.to, blk.number - 1)
         deployStatus.set(tx.to.toLowerCase(), p)
-        if (++parallel > this.limit) await p
+        if (++parallel > this.maxParallel) await p
       }
 
       const receipt = this.web3.eth.getTransactionReceipt(tx.hash)
-      if (++parallel > this.limit) await receipt
+      if (++parallel > this.maxParallel) await receipt
 
       queue.push({
         tx,
@@ -186,7 +179,7 @@ module.exports = class Tail {
       if (checkDeployed && await deployStatus.get(tx.to.toLowerCase())) continue
       if (!(await receipt).status) continue
       await op()
-      if (this.limit < 64) this.limit++
+      if (this.maxParallel < 64) this.maxParallel++
     }
 
     if (this.deployCache) {
