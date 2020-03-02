@@ -24,6 +24,7 @@ module.exports = class Tail {
     this.since = opts.since || 0
     this.minSince = opts.minSince || 0
     this.maxParallel = 1
+    this.hardMaxParallel = opts.maxParallel || 64
     this.stopped = false
     this.running = null
     this.topics = [events.DEPOSIT_FACTORY_DEPLOYED.id, events.DEPOSIT_FORWARDED.id].concat(this.erc20 ? events.ERC20_TRANSFER.id : [])
@@ -72,8 +73,8 @@ module.exports = class Tail {
   isDepositDeployedCached (addr, blockNumber) {
     if (this.deployCache) {
       const deployed = this.deployCache.get(addr.toLowerCase())
-      if (deployed === false) return false
-      if (deployed === true) return true
+      if (deployed === false) return Promise.resolve(false)
+      if (deployed === true) return Promise.resolve(true)
     }
     return this.isDepositDeployed(addr, blockNumber)
   }
@@ -119,67 +120,74 @@ module.exports = class Tail {
     const queue = []
     const deployStatus = new Map()
 
-    if (this.stopped) return all()
+    if (this.stopped) return
 
-    let l = 0
-    let parallel = 0
+    try {
+      let l = 0
+      let parallel = 0
 
-    for (let i = 0; i < blk.transactions.length; i++) {
-      const tx = blk.transactions[i]
+      for (let i = 0; i < blk.transactions.length; i++) {
+        const tx = blk.transactions[i]
 
-      while (l < logs.length && logs[l].transactionIndex === i) {
-        const log = logs[l++]
-        const e = events.decode(log)
-        if (!e) continue
+        while (l < logs.length && logs[l].transactionIndex === i) {
+          const log = logs[l++]
+          const e = events.decode(log)
+          if (!e) continue
 
-        if (e.name === 'ERC20_TRANSFER') {
-          if (!(await this.filter(e.to, TO, log.address)) && !(await this.filter(e.from, FROM, log.address))) {
+          if (e.name === 'ERC20_TRANSFER') {
+            if (!(await this.filter(e.to, TO, log.address)) && !(await this.filter(e.from, FROM, log.address))) {
+              continue
+            }
+          }
+          if (e.name === 'DEPOSIT_FACTORY_DEPLOYED' && !eqList(log.address, this.depositFactory)) {
             continue
           }
-        }
-        if (e.name === 'DEPOSIT_FACTORY_DEPLOYED' && !eqList(log.address, this.depositFactory)) {
-          continue
+
+          // TODO: shortcircuit the DEPOSIT_FORWARDED event also here for more speed
+
+          const receipt = this.web3.eth.getTransactionReceipt(tx.hash)
+
+          queue.push({
+            tx,
+            checkDeployed: false,
+            receipt,
+            op: () => this.onlog(log, e, tx, blk, confirmations, deployStatus)
+          })
+
+          if (++parallel > this.maxParallel) await receipt
         }
 
-        // TODO: shortcircuit the DEPOSIT_FORWARDED event also here for more speed
+        if (this.stopped) return finalise()
+        if (!(await this.filter(tx.to, TO, null)) && !(await this.filter(tx.from, FROM, null))) continue
+        if (this.stopped) return finalise()
+
+        if (tx.to && !deployStatus.has(tx.to.toLowerCase())) {
+          const p = this.isDepositDeployedCached(tx.to, blk.number - 1)
+          deployStatus.set(tx.to.toLowerCase(), p)
+          if (++parallel > this.maxParallel) await p
+        }
 
         const receipt = this.web3.eth.getTransactionReceipt(tx.hash)
-        if (++parallel > this.maxParallel) await receipt
 
         queue.push({
           tx,
-          checkDeployed: false,
+          checkDeployed: !!tx.to,
           receipt,
-          op: () => this.onlog(log, e, tx, blk, confirmations, deployStatus)
+          op: () => this.ontransaction(tx, confirmations, blk)
         })
+
+        if (++parallel > this.maxParallel) await receipt
       }
 
-      if (this.stopped) return all()
-      if (!(await this.filter(tx.to, TO, null)) && !(await this.filter(tx.from, FROM, null))) continue
-      if (this.stopped) return all()
-
-      if (tx.to && !deployStatus.has(tx.to.toLowerCase())) {
-        const p = this.isDepositDeployedCached(tx.to, blk.number - 1)
-        deployStatus.set(tx.to.toLowerCase(), p)
-        if (++parallel > this.maxParallel) await p
+      for (const { tx, checkDeployed, receipt, op } of queue) {
+        if (checkDeployed && await deployStatus.get(tx.to.toLowerCase())) continue
+        if (!(await receipt).status) continue
+        await op()
+        if (this.maxParallel < this.hardMaxParallel) this.maxParallel++
       }
-
-      const receipt = this.web3.eth.getTransactionReceipt(tx.hash)
-      if (++parallel > this.maxParallel) await receipt
-
-      queue.push({
-        tx,
-        checkDeployed: !!tx.to,
-        receipt,
-        op: () => this.ontransaction(tx, confirmations, blk)
-      })
-    }
-
-    for (const { tx, checkDeployed, receipt, op } of queue) {
-      if (checkDeployed && await deployStatus.get(tx.to.toLowerCase())) continue
-      if (!(await receipt).status) continue
-      await op()
-      if (this.maxParallel < 64) this.maxParallel++
+    } catch (err) {
+      await finalise(err)
+      throw err
     }
 
     if (this.deployCache) {
@@ -190,9 +198,11 @@ module.exports = class Tail {
 
     await this.oncheckpoint(blk.number + 1, confirmations, blk)
 
-    async function all () {
-      for (const { receipt } of queue) await receipt
-      for (const v of deployStatus.values()) await v
+    async function finalise () {
+      const list = []
+      for (const { receipt } of queue) list.push(receipt)
+      for (const v of deployStatus.values()) list.push(v)
+      await Promise.allSettled(list)
     }
   }
 }
