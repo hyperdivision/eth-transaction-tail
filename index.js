@@ -66,11 +66,15 @@ module.exports = class Tail {
 
       prev = height
 
-      const { timestamp, number } = await this.eth.getBlockByNumber(height)
-      const ms = Number(timestamp) * 1000
-      if (ms >= Date.now() || (Date.now() - ms) < 10000) return Number(number)
-      const delta = (Date.now() - ms) - 60000
-      await this.queue.blocking.wait(Math.max(500, delta))
+      try {
+        const { timestamp, number } = await this.eth.getBlockByNumber(height)
+        const ms = Number(timestamp) * 1000
+        if (ms >= Date.now() || (Date.now() - ms) < 10000) return Number(number)
+        const delta = (Date.now() - ms) - 60000
+        await this.queue.blocking.wait(Math.max(500, delta))
+      } catch (_) {
+        continue
+      }
     }
   }
 
@@ -126,6 +130,7 @@ module.exports = class Tail {
         queue.push({ receipt, status: false, tx, log, event: e })
       }
 
+      if (tx.value === '0x0') continue
       if (isContract.has(tx.to)) continue
       if (!(await this.filter(tx.to, null))) continue
 
