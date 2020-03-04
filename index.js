@@ -2,6 +2,8 @@ const BlockQueue = require('./lib/queue')
 const NanoETH = require('nanoeth/ipc')
 const events = require('./lib/events')
 
+const DEBUG = !!process.env.ETH_TAIL_DEBUG
+
 module.exports = class Tail {
   constructor (ipc, opts) {
     this.erc20 = opts.erc20 !== false
@@ -55,7 +57,7 @@ module.exports = class Tail {
   async now () {
     let prev = null
 
-    while (true) {
+    while (!this.queue.destroyed) {
       const height = await this.eth.blockNumber()
       if (height === prev) {
         await this.queue.blocking.wait(500)
@@ -73,10 +75,14 @@ module.exports = class Tail {
   }
 
   async get (seq) {
+    if (DEBUG) console.time('[eth-tail] get-block-and-logs-for-' + seq)
+
     const [block, logs] = await Promise.all([
       this.getBlockByNumber(hex(seq), true),
       this.getLogs({ fromBlock: hex(seq), toBlock: hex(seq), topics: [this.ids] })
     ])
+
+    if (DEBUG) console.timeEnd('[eth-tail] get-block-and-logs-for-' + seq)
 
     const queue = []
     const isContract = new Set()
@@ -127,9 +133,15 @@ module.exports = class Tail {
       queue.push({ receipt, status: false, tx, log: null, event: null })
     }
 
-    await Promise.all(queue.map(async (q) => {
+    if (DEBUG) console.time('[eth-tail] get-tx-receipts-' + queue.length + '-for-' + seq)
+
+    const promises = queue.map(async (q) => {
       q.status = (await q.receipt).status === '0x1'
-    }))
+    })
+
+    await Promise.all(promises)
+
+    if (DEBUG) console.timeEnd('[eth-tail] get-tx-receipts-' + queue.length + '-for-' + seq)
 
     return { block, queue }
   }
@@ -137,10 +149,10 @@ module.exports = class Tail {
   start () {
     if (this.started) return this.started
 
-    this.started = Promise.all([
-      this.queue.start(),
-      this.loop()
-    ])
+    const s = this.queue.start()
+    const l = this.loop()
+
+    this.started = Promise.all([s, l])
 
     return this.started
   }
@@ -148,7 +160,9 @@ module.exports = class Tail {
   stop (gracefully = false) {
     if (gracefully) this.eth.end()
     else this.eth.destroy()
-    return this.queue.destroy()
+
+    this.queue.destroy()
+    return this.started
   }
 
   _retry (fn) {
