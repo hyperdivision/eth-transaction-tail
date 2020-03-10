@@ -68,10 +68,11 @@ module.exports = class Tail {
       prev = height
 
       try {
+        const now = Date.now()
         const { timestamp, number } = await this.eth.getBlockByNumber(height)
         const ms = Number(timestamp) * 1000
-        if (ms >= Date.now() || (Date.now() - ms) <= 30000) return Number(number)
-        const delta = (Date.now() - ms) - 60000
+        if (ms >= now || (now - ms) <= 30000) return Number(number)
+        const delta = (now - ms) - 60000
         await this.queue.blocking.wait(Math.max(500, delta))
       } catch (_) {
         continue
