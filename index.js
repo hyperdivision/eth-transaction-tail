@@ -15,6 +15,7 @@ module.exports = class Tail {
     this.ondeposit = opts.deposit || noop
     this.oncheckpoint = opts.checkpoint || noop
     this.onblock = opts.block || noop
+    this.onerc20 = opts.erc20 || noop
     this.ids = [
       events.DEPOSIT_FACTORY_DEPLOYED.id,
       events.DEPOSIT_FORWARDED.id
