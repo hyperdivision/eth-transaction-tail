@@ -74,7 +74,7 @@ module.exports = class Tail {
         if (DEBUG) console.log(`[eth-tail] head loop delta ${now} - ${ms} = ${now - ms}`)
         if (ms >= now || (now - ms) <= 30000) return Number(number)
         const delta = (now - ms) - 60000
-        await this.queue.blocking.wait(Math.max(500, delta))
+        await this.queue.blocking.wait(Math.max(500, Math.min(delta, 1000 * 60 * 2)))
       } catch (_) {
         continue
       }
