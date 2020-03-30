@@ -45,4 +45,10 @@ const head = await tail.head({
 })
 
 await head.start()
+
+// only track txs on a specific addr
+head.track(addr, function ontx (tx, confirms, blk) {
+  ...
+  head.untrack(addr) // to stop
+})
 ```
