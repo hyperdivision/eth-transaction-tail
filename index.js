@@ -5,7 +5,7 @@ const events = require('./lib/events')
 const DEBUG = !!process.env.ETH_TAIL_DEBUG
 
 module.exports = class Tail {
-  constructor (ipc, opts) {
+  constructor (ipc, opts = {}) {
     this.erc20 = opts.erc20 !== false
     this.depositFactory = [].concat(opts.depositFactory || [])
     this.started = null
@@ -30,6 +30,16 @@ module.exports = class Tail {
     this.getBlockByNumber = this._retry((seq, tx) => this.eth.getBlockByNumber(seq, tx))
     this.getLogs = this._retry((opts) => this.eth.getLogs(opts))
     this.getTransactionReceipt = this._retry((hash) => this.eth.getTransactionReceipt(hash))
+
+    this.tracking = new Map()
+  }
+
+  track (addr, ontx) {
+    this.tracking.set(addr.toLowerCase(), ontx)
+  }
+
+  untrack (addr) {
+    this.tracking.delete(addr.toLowerCase())
   }
 
   get since () {
@@ -121,7 +131,7 @@ module.exports = class Tail {
         }
 
         if (e.name === 'DEPOSIT_FORWARDED') {
-          if (!(await this.filter(addr, addr))) continue
+          if (!(await this._filterTo(addr, addr))) continue
         }
 
         if (e.name === 'DEPOSIT_FACTORY_DEPLOYED') {
@@ -130,15 +140,22 @@ module.exports = class Tail {
 
         isContract.add(addr)
         if (!receipt) receipt = this.getTransactionReceipt(tx.hash)
-        queue.push({ receipt, status: false, tx, log, event: e })
+        queue.push({ receipt, status: false, tx, log, event: e, filter: true, txs: null })
       }
 
       if (tx.value === '0x0') continue
       if (isContract.has(tx.to)) continue
-      if (!(await this.filter(tx.to, null))) continue
+
+      const f = this.tracking.get(tx.from && tx.from.toLowerCase())
+      const t = this.tracking.get(tx.to && tx.to.toLowerCase())
+      const filter = await this.filter(tx.to, null)
+
+      if (!filter && !f && !t) continue
 
       if (!receipt) receipt = this.getTransactionReceipt(tx.hash)
-      queue.push({ receipt, status: false, tx, log: null, event: null })
+
+      const txs = (f || t) ? [].concat(f || []).concat(t || []) : null
+      queue.push({ receipt, status: false, tx, log: null, event: null, filter, txs })
     }
 
     if (DEBUG) console.time('[eth-tail] get-tx-receipts-' + queue.length + '-for-' + seq)
@@ -204,25 +221,31 @@ module.exports = class Tail {
 
       await this.onblock(block, confirmations)
 
-      for (const { status, tx, log, event } of queue) {
+      for (const { status, tx, log, event, filter, txs } of queue) {
         if (!status) continue
-        if (event) {
-          if (event.name === 'DEPOSIT_FACTORY_DEPLOYED') {
-            await this.ondepositdeployed({ contractAddress: event.contractAddress }, tx, confirmations, block, log)
-            continue
-          }
 
-          if (event.name === 'DEPOSIT_FORWARDED') {
-            await this.ondeposit({ from: log.address, to: event.to, amount: event.amount }, tx, confirmations, block, log)
-            continue
-          }
+        if (filter) {
+          if (event) {
+            if (event.name === 'DEPOSIT_FACTORY_DEPLOYED') {
+              await this.ondepositdeployed({ contractAddress: event.contractAddress }, tx, confirmations, block, log)
+              continue
+            }
 
-          if (event.name === 'ERC20_TRANSFER') {
-            await this.onerc20({ from: event.from, to: event.to, amount: event.amount, token: log.address }, tx, confirmations, block, log)
-            continue
+            if (event.name === 'DEPOSIT_FORWARDED') {
+              await this.ondeposit({ from: log.address, to: event.to, amount: event.amount }, tx, confirmations, block, log)
+              continue
+            }
+
+            if (event.name === 'ERC20_TRANSFER') {
+              await this.onerc20({ from: event.from, to: event.to, amount: event.amount, token: log.address }, tx, confirmations, block, log)
+              continue
+            }
+          } else {
+            await this.ontransaction(tx, confirmations, block)
           }
-        } else {
-          await this.ontransaction(tx, confirmations, block)
+        }
+        if (txs) {
+          for (const t of txs) t(tx, confirmations, block)
         }
       }
 
