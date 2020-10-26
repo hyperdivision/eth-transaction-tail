@@ -33,6 +33,7 @@ module.exports = class Tail {
 
     this.tracking = new Map()
     this.waits = []
+    this.active = false
   }
 
   track (addr, ontx) {
@@ -171,7 +172,12 @@ module.exports = class Tail {
   }
 
   wait (fn) {
-    this.waits.push(fn)
+    if (this.active) {
+      this.waits.push(fn)
+    } else {
+      const p = fn()
+      this.waits.push(() => p)
+    }
   }
 
   start () {
@@ -219,9 +225,11 @@ module.exports = class Tail {
 
   async loop () {
     while (!this.queue.destroyed) {
+      this.active = false
       const { block, queue } = await this.queue.shift()
+      this.active = true
 
-      while (this.waits.length) await this.waits.shift()(block)
+      while (this.waits.length) await this.waits.shift()()
       if (this.queue.destroyed) break
 
       const blockNumber = Number(block.number)
@@ -261,7 +269,9 @@ module.exports = class Tail {
       }
 
       await this.oncheckpoint(blockNumber + 1)
+      while (this.waits.length) await this.waits.shift()()
     }
+    this.active = false
   }
 }
 
