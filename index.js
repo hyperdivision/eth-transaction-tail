@@ -32,6 +32,7 @@ module.exports = class Tail {
     this.getTransactionReceipt = this._retry((hash) => this.eth.getTransactionReceipt(hash))
 
     this.tracking = new Map()
+    this.waits = []
   }
 
   track (addr, ontx) {
@@ -169,6 +170,10 @@ module.exports = class Tail {
     return { block, queue }
   }
 
+  wait (fn) {
+    this.waits.push(fn)
+  }
+
   start () {
     if (this.started) return this.started
 
@@ -215,6 +220,9 @@ module.exports = class Tail {
   async loop () {
     while (!this.queue.destroyed) {
       const { block, queue } = await this.queue.shift()
+
+      while (this.waits.length) await this.waits.shift()(block)
+      if (this.queue.destroyed) break
 
       const blockNumber = Number(block.number)
       const confirmations = this.queue.blockHeight - blockNumber
