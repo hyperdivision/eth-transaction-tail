@@ -198,7 +198,9 @@ module.exports = class Tail {
         if (i) await this.queue.blocking.wait(1000)
 
         try {
-          return await fn(...args)
+          const res = await fn(...args)
+          if (res === null) throw new Error('RPC returned null')
+          return res
         } catch (err) {
           error = err
         }
