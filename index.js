@@ -180,6 +180,19 @@ module.exports = class Tail {
     }
   }
 
+  async asyncWait (fn) {
+    return new Promise((resolve, reject) => {
+      this.wait(async function () {
+        try {
+          await fn()
+          resolve()
+        } catch (e) {
+          reject(e)
+        }
+      })
+    })
+  }
+
   start () {
     if (this.started) return this.started
 
