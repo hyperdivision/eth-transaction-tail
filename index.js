@@ -171,7 +171,7 @@ module.exports = class Tail {
     return { block, queue }
   }
 
-  wait (fn) {
+  _wait (fn) {
     if (this.active) {
       this.waits.push(fn)
     } else {
@@ -180,7 +180,7 @@ module.exports = class Tail {
     }
   }
 
-  async asyncWait (fn) {
+  async wait (fn) {
     return new Promise((resolve, reject) => {
       this.wait(async function () {
         try {
