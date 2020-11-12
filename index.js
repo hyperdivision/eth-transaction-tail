@@ -182,7 +182,7 @@ module.exports = class Tail {
 
   async wait (fn) {
     return new Promise((resolve, reject) => {
-      this.wait(async function () {
+      this._wait(async function () {
         try {
           await fn()
           resolve()
