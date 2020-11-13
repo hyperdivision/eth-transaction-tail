@@ -171,13 +171,26 @@ module.exports = class Tail {
     return { block, queue }
   }
 
-  wait (fn) {
+  _wait (fn) {
     if (this.active) {
       this.waits.push(fn)
     } else {
       const p = fn()
       this.waits.push(() => p)
     }
+  }
+
+  async wait (fn) {
+    return new Promise((resolve, reject) => {
+      this._wait(async function () {
+        try {
+          await fn()
+          resolve()
+        } catch (e) {
+          reject(e)
+        }
+      })
+    })
   }
 
   start () {
