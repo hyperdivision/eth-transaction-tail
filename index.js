@@ -218,8 +218,15 @@ module.exports = class Tail {
     return async function (...args) {
       let error = null
 
-      for (let i = 0; i < 30; i++) {
-        if (i) await this.queue.blocking.wait(1000)
+      let prevBackoff = 1000
+      let backoff = 1000
+
+      for (let i = 0; i < 10; i++) {
+        if (i) await this.queue.blocking.wait(backoff)
+
+        const tmp = backoff
+        backoff = backoff + prevBackoff
+        prevBackoff = tmp
 
         try {
           const res = await fn(...args)
