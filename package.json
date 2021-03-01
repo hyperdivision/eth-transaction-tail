@@ -1,6 +1,6 @@
 {
   "name": "@hyperdivision/eth-transaction-tail",
-  "version": "4.5.0",
+  "version": "4.5.1",
   "description": "Tails transactions on the Ethereum blockchain",
   "main": "index.js",
   "dependencies": {
