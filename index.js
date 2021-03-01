@@ -22,14 +22,17 @@ module.exports = class Tail {
     ].concat(this.erc20 ? events.ERC20_TRANSFER.id : [])
 
     this.eth = opts.eth || new NanoETH(ipc)
-    this.queue = new BlockQueue(this.eth, {
-      ...opts,
-      get: this.get.bind(this)
-    })
 
+    this.blockNumber = this._retry(() => this.eth.blockNumber())
     this.getBlockByNumber = this._retry((seq, tx) => this.eth.getBlockByNumber(seq, tx))
     this.getLogs = this._retry((opts) => this.eth.getLogs(opts))
     this.getTransactionReceipt = this._retry((hash) => this.eth.getTransactionReceipt(hash))
+
+    this.queue = new BlockQueue(this.eth, {
+      ...opts,
+      get: this.get.bind(this),
+      blockNumber: this.blockNumber.bind(this)
+    })
 
     this.tracking = new Map()
     this.waits = []
