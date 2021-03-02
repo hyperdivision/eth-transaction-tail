@@ -224,7 +224,7 @@ module.exports = class Tail {
       let prevBackoff = 1000
       let backoff = 1000
 
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < 15; i++) {
         if (i) await this.queue.blocking.wait(backoff)
 
         const tmp = backoff
